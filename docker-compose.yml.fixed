@@ -1,0 +1,30 @@
+services:
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:2026.2.15
+    container_name: openclaw-gateway
+    restart: unless-stopped
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=1536
+      # Explicitly set state directory to match volume mount
+      - OPENCLAW_STATE_DIR=/home/node/.openclaw
+      # Ensure we're using the correct user
+      - USER=node
+      - HOME=/home/node
+    ports:
+      - "127.0.0.1:18789:18789"
+    volumes:
+      # Main state directory - ensure this matches OPENCLAW_STATE_DIR
+      - /root/.openclaw:/home/node/.openclaw
+      # Workspace directory (nested mount to ensure it's created)
+      - /root/.openclaw/workspace:/home/node/.openclaw/workspace
+    # Note: user directive may not be needed if image already runs as correct user
+    # Uncomment and adjust UID/GID if you have permission issues:
+    # user: "1000:1000"  # Typical node user UID/GID
+    # 
+    # Health check (optional - remove if curl is not available in image)
+    # healthcheck:
+    #   test: ["CMD-SHELL", "nc -z localhost 18789 || exit 1"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s

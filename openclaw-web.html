@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw Web Interface</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        
+        .status.connected {
+            background: rgba(76, 175, 80, 0.3);
+            border: 2px solid #4CAF50;
+        }
+        
+        .status.disconnected {
+            background: rgba(244, 67, 54, 0.3);
+            border: 2px solid #f44336;
+        }
+        
+        .controls {
+            padding: 20px;
+            background: #f5f5f5;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .input-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+        
+        button {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-connect {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .btn-connect:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+        }
+        
+        .btn-disconnect {
+            background: #f44336;
+            color: white;
+        }
+        
+        .btn-disconnect:hover {
+            background: #da190b;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
+        }
+        
+        .btn-send {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-send:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 600px;
+        }
+        
+        .messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #fafafa;
+        }
+        
+        .message {
+            margin-bottom: 15px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+        
+        .message.user {
+            background: #667eea;
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+        
+        .message.assistant {
+            background: #e0e0e0;
+            color: #333;
+        }
+        
+        .message.system {
+            background: #fff3cd;
+            color: #856404;
+            max-width: 100%;
+            text-align: center;
+            font-size: 0.9em;
+        }
+        
+        .message.error {
+            background: #ffebee;
+            color: #c62828;
+            max-width: 100%;
+        }
+        
+        .input-area {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #ddd;
+        }
+        
+        .input-area textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            resize: vertical;
+            min-height: 80px;
+            font-family: inherit;
+        }
+        
+        .input-area textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .info {
+            padding: 15px;
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            margin: 20px;
+            border-radius: 4px;
+        }
+        
+        .info code {
+            background: rgba(0,0,0,0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🦅 OpenClaw Web Interface</h1>
+            <div id="status" class="status disconnected">Отключено</div>
+        </div>
+        
+        <div class="info">
+            <strong>Инструкция:</strong><br>
+            1. Убедитесь что SSH туннель активен: <code>ssh -L 18789:127.0.0.1:18789 root@217.25.94.44</code><br>
+            2. Введите токен (если требуется) или оставьте пустым<br>
+            3. Нажмите "Подключиться"<br>
+            4. Отправляйте сообщения и получайте ответы от OpenClaw
+        </div>
+        
+        <div class="controls">
+            <div class="input-group">
+                <label for="wsUrl">WebSocket URL:</label>
+                <input type="text" id="wsUrl" value="ws://127.0.0.1:18789" placeholder="ws://127.0.0.1:18789">
+            </div>
+            <div class="input-group">
+                <label for="token">Токен (опционально):</label>
+                <input type="text" id="token" value="9b0dd3b6cff44e7c0fbcb637f6179b9643979eaedefb10da" placeholder="Введите токен аутентификации">
+            </div>
+            <div class="button-group">
+                <button id="connectBtn" class="btn-connect" onclick="connect()">Подключиться</button>
+                <button id="disconnectBtn" class="btn-disconnect" onclick="disconnect()" disabled>Отключиться</button>
+            </div>
+        </div>
+        
+        <div class="chat-container">
+            <div id="messages" class="messages">
+                <div class="message system">
+                    Готов к подключению. Нажмите "Подключиться" чтобы начать.
+                </div>
+            </div>
+            
+            <div class="input-area">
+                <textarea id="messageInput" placeholder="Введите ваше сообщение..." disabled></textarea>
+                <div style="margin-top: 10px;">
+                    <button id="sendBtn" class="btn-send" onclick="sendMessage()" disabled>Отправить</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let ws = null;
+        let messageId = 0;
+        
+        function updateStatus(connected) {
+            const statusEl = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            const messageInput = document.getElementById('messageInput');
+            const sendBtn = document.getElementById('sendBtn');
+            
+            if (connected) {
+                statusEl.textContent = 'Подключено';
+                statusEl.className = 'status connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+            } else {
+                statusEl.textContent = 'Отключено';
+                statusEl.className = 'status disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                messageInput.disabled = true;
+                sendBtn.disabled = true;
+            }
+        }
+        
+        function addMessage(text, type = 'system') {
+            const messagesEl = document.getElementById('messages');
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${type}`;
+            messageEl.textContent = text;
+            messagesEl.appendChild(messageEl);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+        
+        function connect() {
+            const wsUrl = document.getElementById('wsUrl').value;
+            const token = document.getElementById('token').value;
+            
+            if (!wsUrl) {
+                addMessage('Ошибка: Введите WebSocket URL', 'error');
+                return;
+            }
+            
+            try {
+                // Добавляем токен в URL если он указан
+                let url = wsUrl;
+                if (token) {
+                    url += `?token=${encodeURIComponent(token)}`;
+                }
+                
+                addMessage(`Подключение к ${url}...`, 'system');
+                
+                // Пробуем подключиться без токена в URL сначала
+                let wsUrlToTry = wsUrl;
+                
+                // Если токен указан, добавляем его как заголовок или параметр
+                ws = new WebSocket(wsUrlToTry, ['oc-gateway']); // Пробуем подпротокол
+                
+                ws.onopen = function() {
+                    addMessage('✅ Успешно подключено к OpenClaw Gateway!', 'system');
+                    updateStatus(true);
+                    
+                    // Если токен указан, отправляем его после подключения
+                    if (token) {
+                        const authMessage = {
+                            type: 'auth',
+                            token: token
+                        };
+                        ws.send(JSON.stringify(authMessage));
+                        addMessage('Токен аутентификации отправлен', 'system');
+                    }
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'error') {
+                            addMessage(`Ошибка: ${data.message || JSON.stringify(data)}`, 'error');
+                        } else {
+                            addMessage(`Ответ: ${JSON.stringify(data, null, 2)}`, 'assistant');
+                        }
+                    } catch (e) {
+                        addMessage(`Ответ: ${event.data}`, 'assistant');
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    const errorMsg = error.message || 'Неизвестная ошибка';
+                    addMessage(`Ошибка WebSocket: ${errorMsg}`, 'error');
+                    addMessage('Проверьте: 1) SSH туннель активен, 2) Контейнер запущен, 3) URL правильный', 'system');
+                    updateStatus(false);
+                };
+                
+                ws.onclose = function(event) {
+                    let reason = event.reason || 'Не указана';
+                    if (event.code === 1006) {
+                        reason = 'Ненормальное закрытие (возможно сервер не отвечает или неправильный путь)';
+                    }
+                    addMessage(`Соединение закрыто. Код: ${event.code}, Причина: ${reason}`, 'system');
+                    if (event.code === 1006) {
+                        addMessage('💡 Попробуйте: 1) Проверить SSH туннель, 2) Проверить логи OpenClaw на сервере', 'system');
+                    }
+                    updateStatus(false);
+                };
+                
+            } catch (error) {
+                addMessage(`Ошибка подключения: ${error.message}`, 'error');
+                updateStatus(false);
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+                addMessage('Отключено от сервера', 'system');
+            }
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) {
+                return;
+            }
+            
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('Ошибка: Не подключено к серверу', 'error');
+                return;
+            }
+            
+            addMessage(`Вы: ${message}`, 'user');
+            
+            // Формируем сообщение в формате OpenClaw
+            // Пробуем разные форматы сообщений
+            const payload = {
+                id: ++messageId,
+                type: 'chat',
+                message: message,
+                content: message,
+                timestamp: new Date().toISOString()
+            };
+            
+            try {
+                ws.send(JSON.stringify(payload));
+                input.value = '';
+            } catch (error) {
+                addMessage(`Ошибка отправки: ${error.message}`, 'error');
+            }
+        }
+        
+        // Отправка по Enter (Ctrl+Enter для новой строки)
+        document.getElementById('messageInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        
+        // Автоподключение при загрузке (опционально)
+        // connect();
+    </script>
+</body>
+</html>
