@@ -5,9 +5,14 @@ export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { method, params } = body
+    const { gatewayUrl, authToken, method, params } = await request.json()
 
+    if (!gatewayUrl || !authToken) {
+      return new Response(
+        JSON.stringify({ error: "Missing gatewayUrl or authToken" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      )
+    }
     if (!method) {
       return new Response(
         JSON.stringify({ error: "Missing 'method' in request body" }),
@@ -19,7 +24,7 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const msg of streamFromGateway(method, params)) {
+          for await (const msg of streamFromGateway(gatewayUrl, authToken, method, params)) {
             const data = `data: ${JSON.stringify(msg)}\n\n`
             controller.enqueue(encoder.encode(data))
           }
@@ -45,9 +50,7 @@ export async function POST(request: NextRequest) {
     })
   } catch (err) {
     return new Response(
-      JSON.stringify({
-        error: err instanceof Error ? err.message : "Unknown error",
-      }),
+      JSON.stringify({ error: err instanceof Error ? err.message : "Unknown error" }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     )
   }

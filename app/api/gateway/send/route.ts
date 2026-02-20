@@ -5,17 +5,16 @@ export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { method, params } = body
+    const { gatewayUrl, authToken, method, params } = await request.json()
 
+    if (!gatewayUrl || !authToken) {
+      return NextResponse.json({ error: "Missing gatewayUrl or authToken" }, { status: 400 })
+    }
     if (!method) {
-      return NextResponse.json(
-        { error: "Missing 'method' in request body" },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: "Missing 'method' in request body" }, { status: 400 })
     }
 
-    const response = await sendToGateway(method, params)
+    const response = await sendToGateway(gatewayUrl, authToken, method, params)
     return NextResponse.json(response)
   } catch (err) {
     return NextResponse.json(

@@ -1,8 +1,5 @@
 import WebSocket from "ws"
-import type { OpenClawMessage, OpenClawRequest, OpenClawResponse, OpenClawEvent } from "./types"
-
-const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "ws://217.25.94.44:18789"
-const AUTH_TOKEN = process.env.OPENCLAW_AUTH_TOKEN || ""
+import type { OpenClawMessage, OpenClawResponse, OpenClawEvent, OpenClawRequest } from "./types"
 
 let requestCounter = 0
 
@@ -10,12 +7,35 @@ function generateId(): string {
   return `web-${Date.now()}-${++requestCounter}`
 }
 
+function buildConnectRequest(authToken: string): OpenClawRequest {
+  return {
+    type: "req",
+    id: generateId(),
+    method: "connect",
+    params: {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: {
+        id: "openclaw-web-dashboard",
+        version: "1.0.0",
+        platform: "web",
+        mode: "operator",
+      },
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+      auth: { token: authToken },
+      locale: "en-US",
+      userAgent: "openclaw-web-dashboard/1.0.0",
+    },
+  }
+}
+
 /**
- * Creates a one-shot WebSocket connection to the OpenClaw gateway,
- * performs the connect handshake, sends one message, and returns the response.
- * This is designed for serverless (Vercel) where we can't hold long-lived connections.
+ * One-shot WebSocket connection: connect, authenticate, send a request, get the response.
  */
 export async function sendToGateway(
+  gatewayUrl: string,
+  authToken: string,
   method: string,
   params?: Record<string, unknown>,
   timeoutMs = 30000
@@ -26,7 +46,7 @@ export async function sendToGateway(
       reject(new Error("Gateway request timed out"))
     }, timeoutMs)
 
-    const ws = new WebSocket(GATEWAY_URL)
+    const ws = new WebSocket(gatewayUrl)
     let authenticated = false
     const requestId = generateId()
 
@@ -42,10 +62,6 @@ export async function sendToGateway(
       }
     })
 
-    ws.on("open", () => {
-      // Wait for the challenge event from gateway
-    })
-
     ws.on("message", (data) => {
       let msg: OpenClawMessage
       try {
@@ -54,33 +70,13 @@ export async function sendToGateway(
         return
       }
 
-      // Step 1: Receive challenge, send connect request
+      // Step 1: Receive challenge, send connect
       if (msg.type === "event" && (msg as OpenClawEvent).event === "connect.challenge") {
-        const connectReq: OpenClawRequest = {
-          type: "req",
-          id: generateId(),
-          method: "connect",
-          params: {
-            minProtocol: 3,
-            maxProtocol: 3,
-            client: {
-              id: "openclaw-web-dashboard",
-              version: "1.0.0",
-              platform: "web",
-              mode: "operator",
-            },
-            role: "operator",
-            scopes: ["operator.read", "operator.write"],
-            auth: { token: AUTH_TOKEN },
-            locale: "en-US",
-            userAgent: "openclaw-web-dashboard/1.0.0",
-          },
-        }
-        ws.send(JSON.stringify(connectReq))
+        ws.send(JSON.stringify(buildConnectRequest(authToken)))
         return
       }
 
-      // Step 2: Receive hello-ok (successful auth)
+      // Step 2: Auth response
       if (msg.type === "res" && !authenticated) {
         const res = msg as OpenClawResponse
         if (res.error) {
@@ -91,7 +87,6 @@ export async function sendToGateway(
         }
         authenticated = true
 
-        // If the method is just "connect" (status check), return immediately
         if (method === "connect") {
           clearTimeout(timeout)
           ws.close()
@@ -99,7 +94,7 @@ export async function sendToGateway(
           return
         }
 
-        // Step 3: Send the actual request
+        // Step 3: Send user request
         const userReq: OpenClawRequest = {
           type: "req",
           id: requestId,
@@ -110,7 +105,7 @@ export async function sendToGateway(
         return
       }
 
-      // Step 4: Receive the response to our request
+      // Step 4: User response
       if (msg.type === "res" && authenticated) {
         const res = msg as OpenClawResponse
         if (res.id === requestId) {
@@ -124,15 +119,15 @@ export async function sendToGateway(
 }
 
 /**
- * Stream a chat response from the gateway via SSE.
- * Opens a WebSocket, authenticates, sends the chat request,
- * and yields events as they come in.
+ * Streaming WebSocket: connect, authenticate, send request, yield all messages.
  */
 export async function* streamFromGateway(
+  gatewayUrl: string,
+  authToken: string,
   method: string,
   params?: Record<string, unknown>
 ): AsyncGenerator<OpenClawMessage> {
-  const ws = new WebSocket(GATEWAY_URL)
+  const ws = new WebSocket(gatewayUrl)
   let authenticated = false
   const requestId = generateId()
   const messageQueue: OpenClawMessage[] = []
@@ -169,27 +164,7 @@ export async function* streamFromGateway(
     }
 
     if (msg.type === "event" && (msg as OpenClawEvent).event === "connect.challenge") {
-      const connectReq: OpenClawRequest = {
-        type: "req",
-        id: generateId(),
-        method: "connect",
-        params: {
-          minProtocol: 3,
-          maxProtocol: 3,
-          client: {
-            id: "openclaw-web-dashboard",
-            version: "1.0.0",
-            platform: "web",
-            mode: "operator",
-          },
-          role: "operator",
-          scopes: ["operator.read", "operator.write"],
-          auth: { token: AUTH_TOKEN },
-          locale: "en-US",
-          userAgent: "openclaw-web-dashboard/1.0.0",
-        },
-      }
-      ws.send(JSON.stringify(connectReq))
+      ws.send(JSON.stringify(buildConnectRequest(authToken)))
       return
     }
 
@@ -218,7 +193,6 @@ export async function* streamFromGateway(
       messageQueue.push(msg)
       resolveWait?.()
 
-      // Check if this is a final response
       if (msg.type === "res" && (msg as OpenClawResponse).id === requestId) {
         done = true
         ws.close()
@@ -227,7 +201,6 @@ export async function* streamFromGateway(
     }
   })
 
-  // Yield messages as they arrive
   while (!done || messageQueue.length > 0) {
     if (messageQueue.length === 0) {
       await waitForMessage()
@@ -243,16 +216,19 @@ export async function* streamFromGateway(
 }
 
 /**
- * Quick health check: try to connect and authenticate with the gateway.
+ * Quick health check
  */
-export async function checkGatewayHealth(): Promise<{
+export async function checkGatewayHealth(
+  gatewayUrl: string,
+  authToken: string
+): Promise<{
   reachable: boolean
   authenticated: boolean
   error?: string
   info?: Record<string, unknown>
 }> {
   try {
-    const res = await sendToGateway("connect", undefined, 10000)
+    const res = await sendToGateway(gatewayUrl, authToken, "connect", undefined, 10000)
     return {
       reachable: true,
       authenticated: true,

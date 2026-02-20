@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useCallback, useRef } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { StatusBar } from "./status-bar"
+import { SettingsPanel } from "./settings-panel"
 import { Chat } from "./chat"
 import { EventLog, type LogEntry } from "./event-log"
 import type { ChatMessage, ConnectionState } from "@/lib/types"
@@ -10,7 +11,31 @@ function genId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+const STORAGE_KEY = "openclaw-settings"
+
+function loadSettings(): { gatewayUrl: string; authToken: string } {
+  if (typeof window === "undefined") return { gatewayUrl: "", authToken: "" }
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {
+    // ignore
+  }
+  return { gatewayUrl: "", authToken: "" }
+}
+
+function saveSettings(gatewayUrl: string, authToken: string) {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ gatewayUrl, authToken }))
+  } catch {
+    // ignore
+  }
+}
+
 export function Dashboard() {
+  const [gatewayUrl, setGatewayUrl] = useState("")
+  const [authToken, setAuthToken] = useState("")
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected")
   const [connectionError, setConnectionError] = useState<string>()
   const [checking, setChecking] = useState(false)
@@ -18,6 +43,13 @@ export function Dashboard() {
   const [logEntries, setLogEntries] = useState<LogEntry[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+
+  // Load settings from localStorage on mount
+  useEffect(() => {
+    const settings = loadSettings()
+    setGatewayUrl(settings.gatewayUrl)
+    setAuthToken(settings.authToken)
+  }, [])
 
   const addLog = useCallback(
     (direction: LogEntry["direction"], data: string) => {
@@ -32,54 +64,83 @@ export function Dashboard() {
   const addSystemMessage = useCallback((content: string) => {
     setMessages((prev) => [
       ...prev,
-      {
-        id: genId(),
-        role: "system",
-        content,
-        timestamp: Date.now(),
-      },
+      { id: genId(), role: "system", content, timestamp: Date.now() },
     ])
   }, [])
 
-  const checkConnection = useCallback(async () => {
-    setChecking(true)
-    setConnectionState("connecting")
-    setConnectionError(undefined)
-    addLog("info", "Checking gateway connection...")
+  const handleSaveSettings = useCallback(
+    (newUrl: string, newToken: string) => {
+      setGatewayUrl(newUrl)
+      setAuthToken(newToken)
+      saveSettings(newUrl, newToken)
+      setConnectionState("disconnected")
+      setConnectionError(undefined)
+      addLog("info", `Settings saved. Gateway: ${newUrl}`)
 
-    try {
-      const res = await fetch("/api/gateway/status")
-      const data = await res.json()
+      // Auto-connect after saving
+      setTimeout(() => {
+        doCheckConnection(newUrl, newToken)
+      }, 100)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [addLog]
+  )
 
-      if (data.reachable && data.authenticated) {
-        setConnectionState("connected")
-        addLog("received", "Gateway connected and authenticated")
-        addSystemMessage("Connected to OpenClaw Gateway")
-      } else if (data.reachable) {
+  const doCheckConnection = useCallback(
+    async (url?: string, token?: string) => {
+      const gUrl = url || gatewayUrl
+      const gToken = token || authToken
+
+      if (!gUrl || !gToken) {
         setConnectionState("error")
-        setConnectionError("Auth failed: " + (data.error || "Unknown"))
-        addLog("error", `Auth error: ${data.error}`)
-        addSystemMessage(`Authentication failed: ${data.error}`)
-      } else {
-        setConnectionState("error")
-        setConnectionError(data.error || "Gateway unreachable")
-        addLog("error", `Connection error: ${data.error}`)
-        addSystemMessage(`Cannot reach gateway: ${data.error}`)
+        setConnectionError("Set gateway URL and auth token in Settings first")
+        addLog("error", "Missing gateway URL or auth token")
+        return
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Network error"
-      setConnectionState("error")
-      setConnectionError(msg)
-      addLog("error", `Fetch error: ${msg}`)
-      addSystemMessage(`Network error: ${msg}`)
-    } finally {
-      setChecking(false)
-    }
-  }, [addLog, addSystemMessage])
+
+      setChecking(true)
+      setConnectionState("connecting")
+      setConnectionError(undefined)
+      addLog("info", `Connecting to ${gUrl}...`)
+
+      try {
+        const res = await fetch("/api/gateway/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gatewayUrl: gUrl, authToken: gToken }),
+        })
+        const data = await res.json()
+
+        if (data.reachable && data.authenticated) {
+          setConnectionState("connected")
+          addLog("received", "Gateway connected and authenticated")
+          addSystemMessage("Connected to OpenClaw Gateway")
+        } else if (data.reachable) {
+          setConnectionState("error")
+          setConnectionError("Auth failed: " + (data.error || "Unknown"))
+          addLog("error", `Auth error: ${data.error}`)
+          addSystemMessage(`Authentication failed: ${data.error}`)
+        } else {
+          setConnectionState("error")
+          setConnectionError(data.error || "Gateway unreachable")
+          addLog("error", `Connection error: ${data.error}`)
+          addSystemMessage(`Cannot reach gateway: ${data.error}`)
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Network error"
+        setConnectionState("error")
+        setConnectionError(msg)
+        addLog("error", `Fetch error: ${msg}`)
+        addSystemMessage(`Network error: ${msg}`)
+      } finally {
+        setChecking(false)
+      }
+    },
+    [gatewayUrl, authToken, addLog, addSystemMessage]
+  )
 
   const sendMessage = useCallback(
     async (content: string) => {
-      // Add user message
       const userMsg: ChatMessage = {
         id: genId(),
         role: "user",
@@ -90,7 +151,6 @@ export function Dashboard() {
       addLog("sent", `chat.send: ${content.slice(0, 80)}${content.length > 80 ? "..." : ""}`)
       setIsLoading(true)
 
-      // Cancel any previous request
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
@@ -100,6 +160,8 @@ export function Dashboard() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            gatewayUrl,
+            authToken,
             method: "chat.send",
             params: { message: content },
           }),
@@ -118,15 +180,9 @@ export function Dashboard() {
         let assistantContent = ""
         const assistantMsgId = genId()
 
-        // Add empty assistant message that we'll update
         setMessages((prev) => [
           ...prev,
-          {
-            id: assistantMsgId,
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-          },
+          { id: assistantMsgId, role: "assistant", content: "", timestamp: Date.now() },
         ])
 
         let buffer = ""
@@ -147,57 +203,30 @@ export function Dashboard() {
               const msg = JSON.parse(payload)
               addLog("received", JSON.stringify(msg).slice(0, 120))
 
-              // Handle different event types
               if (msg.type === "event") {
                 const eventName = msg.event || ""
-                if (
-                  eventName.includes("chat.token") ||
-                  eventName.includes("chat.chunk")
-                ) {
-                  const token =
-                    msg.payload?.token ||
-                    msg.payload?.content ||
-                    msg.payload?.text ||
-                    ""
+                if (eventName.includes("chat.token") || eventName.includes("chat.chunk")) {
+                  const token = msg.payload?.token || msg.payload?.content || msg.payload?.text || ""
                   assistantContent += token
                   setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantMsgId
-                        ? { ...m, content: assistantContent }
-                        : m
-                    )
+                    prev.map((m) => (m.id === assistantMsgId ? { ...m, content: assistantContent } : m))
                   )
                 } else if (eventName.includes("chat.message")) {
-                  // Full message received at once
-                  const fullContent =
-                    msg.payload?.content ||
-                    msg.payload?.message ||
-                    msg.payload?.text ||
-                    ""
+                  const fullContent = msg.payload?.content || msg.payload?.message || msg.payload?.text || ""
                   if (fullContent) {
                     assistantContent = fullContent
                     setMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === assistantMsgId
-                          ? { ...m, content: assistantContent }
-                          : m
-                      )
+                      prev.map((m) => (m.id === assistantMsgId ? { ...m, content: assistantContent } : m))
                     )
                   }
                 }
               } else if (msg.type === "res") {
-                // Final response
                 if (msg.result?.content || msg.result?.message || msg.result?.text) {
-                  const finalContent =
-                    msg.result.content || msg.result.message || msg.result.text
+                  const finalContent = msg.result.content || msg.result.message || msg.result.text
                   if (!assistantContent) {
                     assistantContent = finalContent
                     setMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === assistantMsgId
-                          ? { ...m, content: assistantContent }
-                          : m
-                      )
+                      prev.map((m) => (m.id === assistantMsgId ? { ...m, content: assistantContent } : m))
                     )
                   }
                 }
@@ -207,11 +236,7 @@ export function Dashboard() {
                     setMessages((prev) =>
                       prev.map((m) =>
                         m.id === assistantMsgId
-                          ? {
-                              ...m,
-                              content: `Error: ${msg.error.message}`,
-                              role: "system" as const,
-                            }
+                          ? { ...m, content: `Error: ${msg.error.message}`, role: "system" as const }
                           : m
                       )
                     )
@@ -221,21 +246,16 @@ export function Dashboard() {
                 addLog("error", msg.error || "Unknown stream error")
               }
             } catch {
-              // Skip malformed SSE data
+              // skip malformed SSE
             }
           }
         }
 
-        // If we never got content, update message
         if (!assistantContent) {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsgId
-                ? {
-                    ...m,
-                    content: "No response received from gateway",
-                    role: "system" as const,
-                  }
+                ? { ...m, content: "No response received from gateway", role: "system" as const }
                 : m
             )
           )
@@ -250,7 +270,7 @@ export function Dashboard() {
         abortRef.current = null
       }
     },
-    [addLog, addSystemMessage]
+    [gatewayUrl, authToken, addLog, addSystemMessage]
   )
 
   return (
@@ -258,8 +278,14 @@ export function Dashboard() {
       <StatusBar
         state={connectionState}
         error={connectionError}
-        onReconnect={checkConnection}
+        onReconnect={() => doCheckConnection()}
         checking={checking}
+      />
+      <SettingsPanel
+        gatewayUrl={gatewayUrl}
+        authToken={authToken}
+        onSave={handleSaveSettings}
+        isConnected={connectionState === "connected"}
       />
       <Chat
         messages={messages}
