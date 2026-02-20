@@ -1,5 +1,9 @@
 import { Dashboard } from "@/components/dashboard"
 
 export default function Page() {
-  return <Dashboard />
+  return (
+    <main className="min-h-screen">
+      <Dashboard />
+    </main>
+  )
 }
