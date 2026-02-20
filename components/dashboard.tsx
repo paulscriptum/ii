@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react"
 import { StatusBar } from "./status-bar"
 import { SettingsPanel } from "./settings-panel"
+import { SetupGuide } from "./setup-guide"
 import { Chat } from "./chat"
 import { EventLog, type LogEntry } from "./event-log"
 import type { ChatMessage, ConnectionState } from "@/lib/types"
@@ -44,7 +45,6 @@ export function Dashboard() {
   const [isLoading, setIsLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
 
-  // Load settings from localStorage on mount
   useEffect(() => {
     const settings = loadSettings()
     setGatewayUrl(settings.gatewayUrl)
@@ -68,24 +68,6 @@ export function Dashboard() {
     ])
   }, [])
 
-  const handleSaveSettings = useCallback(
-    (newUrl: string, newToken: string) => {
-      setGatewayUrl(newUrl)
-      setAuthToken(newToken)
-      saveSettings(newUrl, newToken)
-      setConnectionState("disconnected")
-      setConnectionError(undefined)
-      addLog("info", `Settings saved. Gateway: ${newUrl}`)
-
-      // Auto-connect after saving
-      setTimeout(() => {
-        doCheckConnection(newUrl, newToken)
-      }, 100)
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [addLog]
-  )
-
   const doCheckConnection = useCallback(
     async (url?: string, token?: string) => {
       const gUrl = url || gatewayUrl
@@ -93,7 +75,7 @@ export function Dashboard() {
 
       if (!gUrl || !gToken) {
         setConnectionState("error")
-        setConnectionError("Set gateway URL and auth token in Settings first")
+        setConnectionError("Enter Gateway URL and Auth Token in Settings above")
         addLog("error", "Missing gateway URL or auth token")
         return
       }
@@ -137,6 +119,22 @@ export function Dashboard() {
       }
     },
     [gatewayUrl, authToken, addLog, addSystemMessage]
+  )
+
+  const handleSaveSettings = useCallback(
+    (newUrl: string, newToken: string) => {
+      setGatewayUrl(newUrl)
+      setAuthToken(newToken)
+      saveSettings(newUrl, newToken)
+      setConnectionState("disconnected")
+      setConnectionError(undefined)
+      addLog("info", `Settings saved. Gateway: ${newUrl}`)
+
+      setTimeout(() => {
+        doCheckConnection(newUrl, newToken)
+      }, 100)
+    },
+    [addLog, doCheckConnection]
   )
 
   const sendMessage = useCallback(
@@ -273,6 +271,8 @@ export function Dashboard() {
     [gatewayUrl, authToken, addLog, addSystemMessage]
   )
 
+  const isConfigured = Boolean(gatewayUrl && authToken)
+
   return (
     <main className="flex h-dvh flex-col bg-background">
       <StatusBar
@@ -281,18 +281,23 @@ export function Dashboard() {
         onReconnect={() => doCheckConnection()}
         checking={checking}
       />
+
+      {!isConfigured && <SetupGuide />}
+
       <SettingsPanel
         gatewayUrl={gatewayUrl}
         authToken={authToken}
         onSave={handleSaveSettings}
         isConnected={connectionState === "connected"}
       />
+
       <Chat
         messages={messages}
         onSendMessage={sendMessage}
         isLoading={isLoading}
         isConnected={connectionState === "connected"}
       />
+
       <EventLog entries={logEntries} />
     </main>
   )
