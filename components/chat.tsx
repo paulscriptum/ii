@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect, useCallback } from "react"
-import { Send, Loader2 } from "lucide-react"
+import { Send, Loader2, Trash2 } from "lucide-react"
 import { Message } from "./message"
 import type { ChatMessage } from "@/lib/types"
 
@@ -10,9 +10,10 @@ interface ChatProps {
   onSendMessage: (content: string) => void
   isLoading: boolean
   isConnected: boolean
+  onClear: () => void
 }
 
-export function Chat({ messages, onSendMessage, isLoading, isConnected }: ChatProps) {
+export function Chat({ messages, onSendMessage, isLoading, isConnected, onClear }: ChatProps) {
   const [input, setInput] = useState("")
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -26,7 +27,6 @@ export function Chat({ messages, onSendMessage, isLoading, isConnected }: ChatPr
     if (!trimmed || isLoading || !isConnected) return
     onSendMessage(trimmed)
     setInput("")
-    // Reset textarea height
     if (inputRef.current) {
       inputRef.current.style.height = "auto"
     }
@@ -41,7 +41,6 @@ export function Chat({ messages, onSendMessage, isLoading, isConnected }: ChatPr
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value)
-    // Auto-resize textarea
     const textarea = e.target
     textarea.style.height = "auto"
     textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`
@@ -52,15 +51,30 @@ export function Chat({ messages, onSendMessage, isLoading, isConnected }: ChatPr
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto">
         {messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10">
-              <Send className="h-5 w-5 text-accent" />
+          <div className="flex h-full flex-col items-center justify-center gap-4 px-4">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent/10">
+              <svg
+                className="h-8 w-8 text-accent"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 17l10 5 10-5" />
+                <path d="M2 12l10 5 10-5" />
+              </svg>
             </div>
-            <p className="text-center text-sm text-muted-foreground">
-              {isConnected
-                ? "Send a message to start chatting with OpenClaw"
-                : "Check connection to the gateway first"}
-            </p>
+            <div className="text-center">
+              <h2 className="text-lg font-semibold text-foreground">OpenClaw Chat</h2>
+              <p className="mt-1 max-w-sm text-sm text-muted-foreground text-balance">
+                {isConnected
+                  ? "Select a model above, enter your API key if needed, and start chatting."
+                  : "Connecting to OpenClaw Gateway..."}
+              </p>
+            </div>
           </div>
         ) : (
           <div className="divide-y divide-border/50">
@@ -73,7 +87,7 @@ export function Chat({ messages, onSendMessage, isLoading, isConnected }: ChatPr
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  OpenClaw is thinking...
+                  Generating response...
                 </span>
               </div>
             )}
@@ -85,6 +99,15 @@ export function Chat({ messages, onSendMessage, isLoading, isConnected }: ChatPr
       {/* Input area */}
       <div className="border-t border-border bg-card p-3 sm:p-4">
         <div className="flex items-end gap-2">
+          {messages.length > 0 && (
+            <button
+              onClick={onClear}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+              title="Clear chat"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
           <textarea
             ref={inputRef}
             value={input}
@@ -92,8 +115,8 @@ export function Chat({ messages, onSendMessage, isLoading, isConnected }: ChatPr
             onKeyDown={handleKeyDown}
             placeholder={
               isConnected
-                ? "Type a message... (Enter to send, Shift+Enter for new line)"
-                : "Connect to the gateway first..."
+                ? "Type your message... (Enter to send, Shift+Enter for new line)"
+                : "Waiting for gateway connection..."
             }
             disabled={!isConnected || isLoading}
             rows={1}

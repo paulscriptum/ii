@@ -1,28 +1,21 @@
-import { NextRequest, NextResponse } from "next/server"
-import { checkGatewayHealth } from "@/lib/openclaw-client"
+import { NextResponse } from "next/server"
+import { checkHealth, getModels } from "@/lib/openclaw-client"
 
 export const dynamic = "force-dynamic"
 
-export async function POST(request: NextRequest) {
+export async function GET() {
   try {
-    const { gatewayUrl, authToken } = await request.json()
+    const health = await checkHealth()
+    let models: { id: string; name: string }[] = []
 
-    if (!gatewayUrl || !authToken) {
-      return NextResponse.json(
-        { reachable: false, authenticated: false, error: "Missing gatewayUrl or authToken" },
-        { status: 400 }
-      )
+    if (health.reachable) {
+      models = await getModels()
     }
 
-    const health = await checkGatewayHealth(gatewayUrl, authToken)
-    return NextResponse.json(health)
+    return NextResponse.json({ ...health, models })
   } catch (err) {
     return NextResponse.json(
-      {
-        reachable: false,
-        authenticated: false,
-        error: err instanceof Error ? err.message : "Unknown error",
-      },
+      { reachable: false, error: err instanceof Error ? err.message : "Unknown" },
       { status: 500 }
     )
   }

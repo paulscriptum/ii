@@ -1,151 +1,119 @@
 import WebSocket from "ws"
-import type { OpenClawMessage, OpenClawResponse, OpenClawEvent, OpenClawRequest } from "./types"
 
-let requestCounter = 0
+const GATEWAY_HTTP = "http://217.25.94.44:18800"
+const GATEWAY_WS = "ws://217.25.94.44:18800"
+const AUTH_TOKEN = "9b0dd3b6cff44e7c0fbcb637f6179b9643979eaedefb10da"
 
-function generateId(): string {
-  return `web-${Date.now()}-${++requestCounter}`
-}
-
-function buildConnectRequest(authToken: string): OpenClawRequest {
-  return {
-    type: "req",
-    id: generateId(),
-    method: "connect",
-    params: {
-      minProtocol: 3,
-      maxProtocol: 3,
-      client: {
-        id: "openclaw-web-dashboard",
-        version: "1.0.0",
-        platform: "web",
-        mode: "operator",
-      },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-      auth: { token: authToken },
-      locale: "en-US",
-      userAgent: "openclaw-web-dashboard/1.0.0",
-    },
+/**
+ * Check if gateway is reachable via HTTP
+ */
+export async function checkHealth(): Promise<{
+  reachable: boolean
+  error?: string
+}> {
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 8000)
+    const res = await fetch(GATEWAY_HTTP, { signal: controller.signal })
+    clearTimeout(timeout)
+    return { reachable: res.ok }
+  } catch (err) {
+    return {
+      reachable: false,
+      error: err instanceof Error ? err.message : "Cannot reach gateway",
+    }
   }
 }
 
 /**
- * One-shot WebSocket connection: connect, authenticate, send a request, get the response.
+ * Send a request to the OpenClaw gateway via WebSocket.
+ * The WS endpoint is ws://host/ws?token=TOKEN
  */
-export async function sendToGateway(
-  gatewayUrl: string,
-  authToken: string,
+export async function sendWsRequest(
   method: string,
   params?: Record<string, unknown>,
   timeoutMs = 30000
-): Promise<OpenClawResponse> {
+): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    const wsUrl = `${GATEWAY_WS}/ws?token=${AUTH_TOKEN}`
+    const ws = new WebSocket(wsUrl)
+    const timer = setTimeout(() => {
       ws.close()
-      reject(new Error("Gateway request timed out"))
+      reject(new Error("Request timed out"))
     }, timeoutMs)
 
-    const ws = new WebSocket(gatewayUrl)
-    let authenticated = false
-    const requestId = generateId()
+    const reqId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+    ws.on("open", () => {
+      const payload: Record<string, unknown> = {
+        type: "req",
+        id: reqId,
+        method,
+      }
+      if (params) payload.params = params
+      ws.send(JSON.stringify(payload))
+    })
 
     ws.on("error", (err) => {
-      clearTimeout(timeout)
+      clearTimeout(timer)
       reject(new Error(`WebSocket error: ${err.message}`))
     })
 
-    ws.on("close", (code, reason) => {
-      clearTimeout(timeout)
-      if (!authenticated) {
-        reject(new Error(`Connection closed before auth: code=${code} reason=${reason}`))
+    ws.on("message", (data) => {
+      try {
+        const msg = JSON.parse(data.toString())
+        if (msg.id === reqId || msg.type === "res") {
+          clearTimeout(timer)
+          ws.close()
+          if (msg.error) {
+            reject(new Error(msg.error.message || JSON.stringify(msg.error)))
+          } else {
+            resolve(msg.result || msg)
+          }
+        }
+      } catch {
+        // skip
       }
     })
 
-    ws.on("message", (data) => {
-      let msg: OpenClawMessage
-      try {
-        msg = JSON.parse(data.toString())
-      } catch {
-        return
-      }
-
-      // Step 1: Receive challenge, send connect
-      if (msg.type === "event" && (msg as OpenClawEvent).event === "connect.challenge") {
-        ws.send(JSON.stringify(buildConnectRequest(authToken)))
-        return
-      }
-
-      // Step 2: Auth response
-      if (msg.type === "res" && !authenticated) {
-        const res = msg as OpenClawResponse
-        if (res.error) {
-          clearTimeout(timeout)
-          ws.close()
-          reject(new Error(`Auth failed: ${res.error.message}`))
-          return
-        }
-        authenticated = true
-
-        if (method === "connect") {
-          clearTimeout(timeout)
-          ws.close()
-          resolve(res)
-          return
-        }
-
-        // Step 3: Send user request
-        const userReq: OpenClawRequest = {
-          type: "req",
-          id: requestId,
-          method,
-          params,
-        }
-        ws.send(JSON.stringify(userReq))
-        return
-      }
-
-      // Step 4: User response
-      if (msg.type === "res" && authenticated) {
-        const res = msg as OpenClawResponse
-        if (res.id === requestId) {
-          clearTimeout(timeout)
-          ws.close()
-          resolve(res)
-        }
-      }
+    ws.on("close", (code, reason) => {
+      clearTimeout(timer)
+      // only reject if promise hasn't resolved yet
     })
   })
 }
 
 /**
- * Streaming WebSocket: connect, authenticate, send request, yield all messages.
+ * Stream messages from the OpenClaw gateway via WS.
+ * Yields each message as it arrives until the response for our request ID comes back.
  */
-export async function* streamFromGateway(
-  gatewayUrl: string,
-  authToken: string,
+export async function* streamWsMessages(
   method: string,
   params?: Record<string, unknown>
-): AsyncGenerator<OpenClawMessage> {
-  const ws = new WebSocket(gatewayUrl)
-  let authenticated = false
-  const requestId = generateId()
-  const messageQueue: OpenClawMessage[] = []
+): AsyncGenerator<Record<string, unknown>> {
+  const wsUrl = `${GATEWAY_WS}/ws?token=${AUTH_TOKEN}`
+  const ws = new WebSocket(wsUrl)
+  const reqId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+  const queue: Record<string, unknown>[] = []
   let resolveWait: (() => void) | null = null
   let done = false
-  let error: Error | null = null
+  let wsError: Error | null = null
 
-  const waitForMessage = () =>
-    new Promise<void>((resolve) => {
-      if (messageQueue.length > 0 || done) {
-        resolve()
-      } else {
-        resolveWait = resolve
-      }
+  const waitForMessage = (): Promise<void> =>
+    new Promise((resolve) => {
+      if (queue.length > 0 || done) resolve()
+      else resolveWait = resolve
     })
 
+  ws.on("open", () => {
+    const payload: Record<string, unknown> = { type: "req", id: reqId, method }
+    if (params) payload.params = params
+    ws.send(JSON.stringify(payload))
+  })
+
   ws.on("error", (err) => {
-    error = new Error(`WebSocket error: ${err.message}`)
+    wsError = new Error(`WebSocket error: ${err.message}`)
     done = true
     resolveWait?.()
   })
@@ -156,90 +124,68 @@ export async function* streamFromGateway(
   })
 
   ws.on("message", (data) => {
-    let msg: OpenClawMessage
     try {
-      msg = JSON.parse(data.toString())
-    } catch {
-      return
-    }
-
-    if (msg.type === "event" && (msg as OpenClawEvent).event === "connect.challenge") {
-      ws.send(JSON.stringify(buildConnectRequest(authToken)))
-      return
-    }
-
-    if (msg.type === "res" && !authenticated) {
-      const res = msg as OpenClawResponse
-      if (res.error) {
-        error = new Error(`Auth failed: ${res.error.message}`)
-        done = true
-        ws.close()
-        resolveWait?.()
-        return
-      }
-      authenticated = true
-
-      const userReq: OpenClawRequest = {
-        type: "req",
-        id: requestId,
-        method,
-        params,
-      }
-      ws.send(JSON.stringify(userReq))
-      return
-    }
-
-    if (authenticated) {
-      messageQueue.push(msg)
+      const msg = JSON.parse(data.toString())
+      queue.push(msg)
       resolveWait?.()
 
-      if (msg.type === "res" && (msg as OpenClawResponse).id === requestId) {
+      // If it's the response to our request, mark as done
+      if (msg.type === "res" && msg.id === reqId) {
         done = true
         ws.close()
         resolveWait?.()
       }
+    } catch {
+      // skip
     }
   })
 
-  while (!done || messageQueue.length > 0) {
-    if (messageQueue.length === 0) {
+  while (!done || queue.length > 0) {
+    if (queue.length === 0) {
       await waitForMessage()
     }
-    while (messageQueue.length > 0) {
-      yield messageQueue.shift()!
+    while (queue.length > 0) {
+      yield queue.shift()!
     }
   }
 
-  if (error) {
-    throw error
-  }
+  if (wsError) throw wsError
 }
 
 /**
- * Quick health check
+ * Make an HTTP request to the OpenClaw API (for endpoints like /v1/chat/completions)
  */
-export async function checkGatewayHealth(
-  gatewayUrl: string,
-  authToken: string
-): Promise<{
-  reachable: boolean
-  authenticated: boolean
-  error?: string
-  info?: Record<string, unknown>
-}> {
+export async function httpRequest(
+  path: string,
+  body: Record<string, unknown>
+): Promise<Response> {
+  const url = `${GATEWAY_HTTP}${path}`
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${AUTH_TOKEN}`,
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * Get available models from the gateway
+ */
+export async function getModels(): Promise<{ id: string; name: string }[]> {
   try {
-    const res = await sendToGateway(gatewayUrl, authToken, "connect", undefined, 10000)
-    return {
-      reachable: true,
-      authenticated: true,
-      info: res.result,
+    const url = `${GATEWAY_HTTP}/v1/models`
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    if (data.data && Array.isArray(data.data)) {
+      return data.data.map((m: { id: string }) => ({ id: m.id, name: m.id }))
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    return {
-      reachable: !message.includes("ECONNREFUSED") && !message.includes("timed out"),
-      authenticated: false,
-      error: message,
-    }
+    return []
+  } catch {
+    return []
   }
 }
